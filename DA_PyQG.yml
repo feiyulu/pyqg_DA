@@ -1,0 +1,22 @@
+name: DA_PyQG
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - xarray
+  - jupyterlab
+  - pytorch
+  - torchvision
+  - torchsummary
+  - tqdm 
+  - numpy 
+  - scipy 
+  - seaborn 
+  - pyqg 
+  - numba 
+  - matplotlib
+  - pyfftw=0.12
+  - netCDF4
+  - dask
+  - cython
