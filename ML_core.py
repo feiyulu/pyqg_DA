@@ -5,6 +5,7 @@ import numpy as np
 from DA_core import localize_q
 import tqdm
 
+# Generate training data: subsets of data from the full matrices
 class Dataset(torch.utils.data.Dataset):
     def __init__(self,q_da,Nx,B_da,indy,indx,partition,q_std,B_std,in_ch,out_ch,**kwargs):
         super(Dataset, self).__init__()

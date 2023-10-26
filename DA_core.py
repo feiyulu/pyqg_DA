@@ -15,8 +15,8 @@ import psutil
 
 rng = default_rng()
 
-read_data_dir='/scratch/cimes/feiyul/PyQG/data'
-save_data_dir='/scratch/cimes/feiyul/PyQG/data'
+read_data_dir='./data'
+save_data_dir='./output'
 # read_data_dir='/work/Feiyu.Lu/PyQG/data'
 # save_data_dir='/work/Feiyu.Lu/PyQG/data'
 model_para={'rek':3.5E-8,'delta':0.05,'beta':0.5E-11}
