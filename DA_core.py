@@ -25,6 +25,7 @@ year=int(60*60*24*365)
 default_model=pyqg.QGModel()
 year_step=year/int(default_model.dt)
 
+# Data assimilation class for DA related functions
 class DA_exp():
     def __init__(self,Nx_truth=64,**kwargs):
         '''
@@ -593,7 +594,13 @@ def B_calculation_3DVar(Nx=64,years=100,lev=2,save_netcdf=True):
             
     return ds
 
+# Take subset (subdomain) of data from the global matrix (domain)
 def localize_q(q,y,x,Nx,B_R):
+    # q: global data matrix
+    # x,y: center point for the subset
+    # Nx: global domain size
+    # B_R: radius for the subset
+    
     i_y=np.arange(y-B_R,y+B_R+1)
     i_x=np.arange(x-B_R,x+B_R+1)
     i_y1=np.where(i_y>=0,i_y,i_y+Nx)
