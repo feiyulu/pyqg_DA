@@ -44,7 +44,8 @@ class Dataset(torch.utils.data.Dataset):
         i_t=self.ind[i]//(self.B_ny*self.B_nx)
         i_y=(self.ind[i]%(self.B_ny*self.B_nx))//self.B_nx
         i_x=(self.ind[i]%(self.B_ny*self.B_nx))%self.B_nx
-        # The feature/target samples are taken as simple subsets of the B matrices bia indexing
+        
+        # The feature/target samples are taken as simple subsets of the B matrices via indexing
         for i_ch,ch in enumerate(self.out_ch):
             if ch==0:
                 B[i_ch,...]=self.B_da.isel(time=i_t,y=i_y,x=i_x,lev=0,lev_d=0).\
@@ -58,6 +59,7 @@ class Dataset(torch.utils.data.Dataset):
                 B[i_ch,...]=self.B_da.isel(time=i_t,y=i_y,x=i_x,lev=1,lev_d=1).\
                     isel(x_d=slice(self.B_start,self.B_start+self.B_size),
                          y_d=slice(self.B_start,self.B_start+self.B_size))/self.B_std[1,1]
+                    
         # The input/predictor samples are localized from the full q matrices
         if len(self.in_ch)==2:
             q[0,...]=localize_q(self.q_da.isel(time=i_t,lev=0),self.indy[i_y],self.indx[i_x],self.Nx,self.B_R)\

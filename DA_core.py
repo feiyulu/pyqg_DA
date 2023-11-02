@@ -388,6 +388,7 @@ class DA_exp():
             DA_B_size=self.R_DA*2+1
             training_Unet_size=int(self.R_training/2)*4
             
+            # Localized q of the size of the U-Net are taken from the full q fields
             q_data=np.zeros((self.Nx_DA,self.Nx_DA,Nlev,DA_Unet_size,DA_Unet_size))
             # q_data=np.zeros((self.Nx_DA,self.Nx_DA,4,DA_Unet_size,DA_Unet_size))
             for i in np.arange(self.Nx_DA):
@@ -397,11 +398,11 @@ class DA_exp():
                     # q_data[j,i,2,:,:]=q_data[j,i,0,:,:]-localize_q(analysis_prev.mean('model').isel(lev=0),j,i,self.Nx_DA,self.R_DA)[...,0:DA_Unet_size,0:DA_Unet_size]
                     # q_data[j,i,3,:,:]=q_data[j,i,1,:,:]-localize_q(analysis_prev.mean('model').isel(lev=1),j,i,self.Nx_DA,self.R_DA)[...,0:DA_Unet_size,0:DA_Unet_size]
 
+            # Normalization
             q_stacked=q_data.reshape((-1,Nlev,DA_Unet_size,DA_Unet_size))/ml_std.q_std.data[None,:,None,None]
             # print(q_stacked.shape)
-            # q_stacked=q_data.reshape((-1,4,DA_Unet_size,DA_Unet_size))
-            # q_stacked[:,:2,:,:]=q_stacked[:,:2,:,:]/ml_std.q_std.data[None,:,None,None]
-            # q_stacked[:,2:,:,:]=q_stacked[:,2:,:,:]/ml_std.q_std.data[None,:,None,None]
+
+            
             B_data=np.zeros((self.Nx_DA,self.Nx_DA,3,DA_B_size,DA_B_size))
             B_stacked=B_data.reshape((-1,3,DA_B_size,DA_B_size))
             B_pred_all=np.zeros((B_stacked.shape[0],B_stacked.shape[1],training_Unet_size,training_Unet_size))
@@ -409,6 +410,8 @@ class DA_exp():
             total=q_stacked.shape[0]
             B_std=np.array([ml_std.B_std.data[0,0],ml_std.B_std.data[0,1],ml_std.B_std.data[1,1]])
             
+            # q is interpolated if the DA model has different grids than than model used to train the U-Net
+            # Here it is exclusively downsampled to half the resolution (double the drig size)
             if self.training_exp.Nx_DA!=self.Nx_DA:
                 q_interp=np.zeros((q_stacked.shape[0],q_stacked.shape[1],training_Unet_size,training_Unet_size))
                 # q_interp=q_stacked[:,:,0::2,0::2]
@@ -420,6 +423,7 @@ class DA_exp():
             else:
                 q_interp=q_stacked
             
+            # Covariance matrices are predicted by the U-Net using the localized (and interpolated) q as input
             for i in np.arange(int(total/chunk)+1):
                 # B_pred=ml_model(torch.from_numpy(q_interp[i*chunk:(i+1)*chunk,:,:,:]).double()).detach().numpy()*B_std[None,:,None,None]
                 B_pred=ml_model(torch.from_numpy(q_interp[i*chunk:(i+1)*chunk,:,:,:]).double().to(device)).to('cpu').detach().numpy()*B_std[None,:,None,None]
@@ -427,19 +431,11 @@ class DA_exp():
         
             # print(B_pred_all.shape)
             # print(B_stacked.shape)
+            
+            # The covariance matrices are interpolated back to the DA resoultion from the U-Net predicted resolution
             if self.training_exp.Nx_DA!=self.Nx_DA:
                 # X_training=np.arange(0,DA_Unet_size,2)
                 # Y_training=np.arange(0,DA_Unet_size,2)
-                # X_training_mesh,Y_training_mesh=np.meshgrid(X_training,Y_training)
-                # X_DA=np.arange(0,DA_Unet_size)
-                # Y_DA=np.arange(0,DA_Unet_size)
-                # X_DA_mesh,Y_DA_mesh=np.meshgrid(X_DA,Y_DA)
-                # B_interp=griddata((X_training_mesh.flatten(),Y_training_mesh.flatten()),
-                #                   B_pred_all.reshape((B_stacked.shape[0]*B_stacked.shape[1],-1)).transpose(),
-                #                   (X_DA_mesh,Y_DA_mesh),method='linear',fill_value=0.0)
-                # # print(B_interp.shape)
-                # B_stacked[:,:,0:DA_Unet_size,0:DA_Unet_size]=B_interp.transpose().reshape((B_stacked.shape[0],B_stacked.shape[1],DA_Unet_size,DA_Unet_size))
-
                 X_training=np.arange(2,DA_Unet_size-2,2)
                 Y_training=np.arange(2,DA_Unet_size-2,2)
                 X_training_mesh,Y_training_mesh=np.meshgrid(X_training,Y_training)
@@ -454,8 +450,11 @@ class DA_exp():
                 
             else:
                 B_stacked[:,:,0:DA_Unet_size,0:DA_Unet_size]=B_pred_all
+                
+            # The localized covariance matrices are put back into the global form 
             B_Unet=globalize_B(B_stacked.reshape(B_data.shape),self.Nx_DA,Nlev,self.R_DA)
             B_Unet_loc=(B_Unet+self.B_alpha*self.B_ds.cov.data)*self.W_ds.W.data
+            
             if self.nens==1:
                 posterior=Lin3dvar(prior_data.squeeze(),obs_q,H,R_obs,B_Unet_loc)
             elif self.nens>1:
