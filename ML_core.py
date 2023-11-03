@@ -5,77 +5,19 @@ import numpy as np
 from DA_core import localize_q
 import tqdm
 
-# Generate training data: subsets of data from the full matrices
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self,q_da,Nx,B_da,indy,indx,partition,q_std,B_std,in_ch,out_ch,**kwargs):
+    def __init__(self,q_data,B_data,device=torch.device('cpu'),**kwargs):
         super(Dataset, self).__init__()
 
-        self.q_da=q_da
-        self.B_da=B_da
-        self.B_R=int(len(B_da.x_d)/2)
-        if 'B_size' in kwargs:
-            self.B_size=kwargs['B_size']
-        else:
-            self.B_size=int(self.B_R/2)*4
-        if 'B_start' in kwargs:
-            self.B_start=kwargs['B_start']
-        else:
-            self.B_start=0
-        self.B_shape=self.B_da.shape
-        self.B_nt=len(self.B_da.time)
-        self.B_ny=len(self.B_da.y)
-        self.B_nx=len(self.B_da.x)
-        self.indx=indx
-        self.indy=indy
-        self.Nx=Nx
-        self.B_total=self.B_nt*self.B_ny*self.B_nx
-        self.ind=partition
-        self.B_std=B_std
-        self.q_std=q_std
-        self.in_ch=in_ch
-        self.out_ch=out_ch
+        self.q_data=q_data
+        self.B_data=B_data
+        self.len=len(self.q_data)
         
     def __len__(self):
-        return len(self.ind)
+        return self.len
         
     def __getitem__(self, i):
-        B=np.empty((len(self.out_ch),self.B_size,self.B_size)).astype(np.double)
-        q=np.empty((len(self.in_ch),self.B_size,self.B_size)).astype(np.double)
-        i_t=self.ind[i]//(self.B_ny*self.B_nx)
-        i_y=(self.ind[i]%(self.B_ny*self.B_nx))//self.B_nx
-        i_x=(self.ind[i]%(self.B_ny*self.B_nx))%self.B_nx
-        
-        # The feature/target samples are taken as simple subsets of the B matrices via indexing
-        for i_ch,ch in enumerate(self.out_ch):
-            if ch==0:
-                B[i_ch,...]=self.B_da.isel(time=i_t,y=i_y,x=i_x,lev=0,lev_d=0).\
-                    isel(x_d=slice(self.B_start,self.B_start+self.B_size),
-                        y_d=slice(self.B_start,self.B_start+self.B_size))/self.B_std[0,0]
-            if ch==1:
-                B[i_ch,...]=self.B_da.isel(time=i_t,y=i_y,x=i_x,lev=0,lev_d=1).\
-                    isel(x_d=slice(self.B_start,self.B_start+self.B_size),
-                         y_d=slice(self.B_start,self.B_start+self.B_size))/self.B_std[0,1]
-            if ch==2:
-                B[i_ch,...]=self.B_da.isel(time=i_t,y=i_y,x=i_x,lev=1,lev_d=1).\
-                    isel(x_d=slice(self.B_start,self.B_start+self.B_size),
-                         y_d=slice(self.B_start,self.B_start+self.B_size))/self.B_std[1,1]
-                    
-        # The input/predictor samples are localized from the full q matrices
-        if len(self.in_ch)==2:
-            q[0,...]=localize_q(self.q_da.isel(time=i_t,lev=0),self.indy[i_y],self.indx[i_x],self.Nx,self.B_R)\
-                [...,self.B_start:self.B_start+self.B_size,self.B_start:self.B_start+self.B_size]/self.q_std[0]
-            q[1,...]=localize_q(self.q_da.isel(time=i_t,lev=1),self.indy[i_y],self.indx[i_x],self.Nx,self.B_R)\
-                [...,self.B_start:self.B_start+self.B_size,self.B_start:self.B_start+self.B_size]/self.q_std[1]
-        elif len(self.in_ch)==4:
-            q[0,...]=localize_q(self.q_da.isel(time=i_t,lev=0),self.indy[i_y],self.indx[i_x],self.Nx,self.B_R)\
-                [...,self.B_start:self.B_start+self.B_size,self.B_start:self.B_start+self.B_size]/self.q_std[0]
-            q[1,...]=localize_q(self.q_da.isel(time=i_t,lev=1),self.indy[i_y],self.indx[i_x],self.Nx,self.B_R)\
-                [...,self.B_start:self.B_start+self.B_size,self.B_start:self.B_start+self.B_size]/self.q_std[1]
-            q[2,...]=localize_q(self.q_da.isel(time=i_t,lev=0)-self.q_da.isel(time=i_t-1,lev=0),self.indy[i_y],self.indx[i_x],self.Nx,self.B_R)\
-                [...,self.B_start:self.B_start+self.B_size,self.B_start:self.B_start+self.B_size]/self.q_std[0]
-            q[3,...]=localize_q(self.q_da.isel(time=i_t,lev=1)-self.q_da.isel(time=i_t-1,lev=1),self.indy[i_y],self.indx[i_x],self.Nx,self.B_R)\
-                [...,self.B_start:self.B_start+self.B_size,self.B_start:self.B_start+self.B_size]/self.q_std[1]
-        return q,B
+        return self.q_data[i,...],self.B_data[i,...]
 
 #double 3x3 convolution 
 def dual_conv(in_channel, out_channel):
@@ -204,11 +146,11 @@ class Unet_2L(nn.Module):
 def train_model(net,criterion,trainloader,optimizer,device):
     net.train()
     test_loss = 0
-    for step, (batch_x, batch_y) in enumerate(trainloader):  # for each training step
-        b_x = Variable(batch_x).to(device) # Inputs
-        b_y = Variable(batch_y).to(device) # outputs
-        prediction = net(b_x)
-        loss = criterion(prediction, b_y)   # Calculating loss 
+    for step, (batch_q, batch_B) in enumerate(trainloader):  # for each training step
+        q = Variable(batch_q).to(device) # Inputs
+        B = Variable(batch_B).to(device) # outputs
+        B_pred = net(q)
+        loss = criterion(B_pred, B)   # Calculating loss 
         optimizer.zero_grad()  # clear gradients for next train
         loss.backward()  # backpropagation, compute gradients
         optimizer.step()  # apply gradients to update weights
