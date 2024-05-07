@@ -19,7 +19,7 @@ as documented in the [Lorenz-96 notebooks](https://m2lines.github.io/L96_demo/no
 * `training.py`: Python script to train U-Net
 * `UNetKF.py`: Python script to run UNetKF DA experiments
 
-## Current Issues
+## Instructions
 
 For the code clinic, I would like to optimize the code related to the training and inference, especially in the case of using GPU.
 
@@ -35,8 +35,6 @@ During training, each data sample consists of a localized `q` matrix and a local
 The same process happens during inference. When the U-Net is applied in the DA processs, a localized `q` matrix is constructed around each model gridpoint.
 
 ### `ML_core.py`
-
-Because the training samples are taken as moving subsets of the full datasets, after reading the input data, the "get item" function takes one sample at a time to generate the data batches.
 
 ### `B_UNet.ipynb`
 
