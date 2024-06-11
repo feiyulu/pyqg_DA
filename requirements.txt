@@ -1,0 +1,12 @@
+matplotlib
+numpy
+scipy
+torch
+xarray
+numba
+netCDF4
+cython
+dask
+tqdm
+torchvision
+-e git://github.com/pyqg/pyqg.git#egg=pyqg

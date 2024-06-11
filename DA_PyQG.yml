@@ -5,10 +5,9 @@ channels:
   - defaults
 dependencies:
   - xarray
-  - jupyterlab
+  - jupyter
   - pytorch
   - torchvision
-  - torchsummary
   - tqdm 
   - numpy 
   - scipy 
@@ -16,7 +15,6 @@ dependencies:
   - pyqg 
   - numba 
   - matplotlib
-  - pyfftw=0.12
   - netCDF4
   - dask
   - cython
