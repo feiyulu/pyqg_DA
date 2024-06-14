@@ -12,11 +12,12 @@ from tqdm import tqdm
 import torch
 import multiprocessing as mp
 import psutil
+from numpy.linalg import matrix_rank
 
 rng = default_rng()
 
-read_data_dir='./data'
-save_data_dir='./output'
+read_data_dir='/scratch/cimes/feiyul/PyQG/data'
+save_data_dir='/scratch/cimes/feiyul/PyQG/data/test/'
 # read_data_dir='/work/Feiyu.Lu/PyQG/data'
 # save_data_dir='/work/Feiyu.Lu/PyQG/data'
 model_para={'rek':3.5E-8,'delta':0.05,'beta':0.5E-11}
@@ -25,7 +26,6 @@ year=int(60*60*24*365)
 default_model=pyqg.QGModel()
 year_step=year/int(default_model.dt)
 
-# Data assimilation class for DA related functions
 class DA_exp():
     def __init__(self,Nx_truth=64,**kwargs):
         '''
@@ -51,12 +51,15 @@ class DA_exp():
             self.obs_err=kwargs['obs_err']
         if 'DA_method' in kwargs:
             self.DA_method=kwargs['DA_method']
-            if self.DA_method=='UnetKF':
+            if self.DA_method in ['3DVar','En3DVar','3DEnVar','UnetKF','EnKF']:
+                self.delta_days=kwargs['delta_days']
+            if self.DA_method in ['UnetKF','3DEnVar']:
                 self.B_alpha=kwargs['B_alpha']
+            if self.DA_method=='UnetKF':
                 self.R_training=kwargs['R_training']
                 self.R_DA=kwargs['R_DA']
                 self.training_exp=kwargs['training_exp']
-            if self.DA_method=='EnKF' or self.DA_method=='UnetKF':
+            if self.DA_method in ['EnKF','3DEnVar','UnetKF']:
                 self.save_B=kwargs['save_B'] if 'save_B' in kwargs else False
                 self.inflate=kwargs['inflate']
             if 'training_var' in kwargs:
@@ -240,13 +243,24 @@ class DA_exp():
         
     def file_name(self):
         '''file name specific to the DA experiment'''
-        if self.DA_method=='EnKF':
+        if self.DA_method=='NoDA':
+            f='{}_Nx{}_from_Nx{}'.\
+                format(self.DA_method,self.Nx_DA,self.Nx_truth)
+        elif self.DA_method=='EnKF':
             f='{}_Nx{}_from_Nx{}_ens{}_freq{}_relax{}_R{}_nobs{}_err{}E{}_{}E{}'.\
                 format(self.DA_method,self.Nx_DA,self.Nx_truth,self.nens,self.DA_freq,self.inflate[1],self.R_W,'_'.join(map(str,self.nobs)),
                 self.obs_err[0],self.obs_err[1],self.obs_err[2],self.obs_err[3])
+        elif self.DA_method=='3DEnVar':
+            f='{}_Nx{}_from_Nx{}_d{}_ens{}_freq{}_relax{}_hybrid{}_R{}_nobs{}_err{}E{}_{}E{}'.\
+                format(self.DA_method,self.Nx_DA,self.Nx_truth,self.delta_days,self.nens-1,self.DA_freq,self.inflate[1],self.B_alpha,
+                       self.R_W,'_'.join(map(str,self.nobs)),self.obs_err[0],self.obs_err[1],self.obs_err[2],self.obs_err[3])
         elif self.DA_method=='3DVar':
-            f='{}_Nx{}_from_Nx{}_freq{}_R{}_nobs{}_err{}E{}_{}E{}'.\
-                format(self.DA_method,self.Nx_DA,self.Nx_truth,self.DA_freq,self.R_W,'_'.join(map(str,self.nobs)),
+            f='{}_Nx{}_from_Nx{}_d{}_freq{}_R{}_nobs{}_err{}E{}_{}E{}'.\
+                format(self.DA_method,self.Nx_DA,self.Nx_truth,self.delta_days,self.DA_freq,self.R_W,'_'.join(map(str,self.nobs)),
+                self.obs_err[0],self.obs_err[1],self.obs_err[2],self.obs_err[3])
+        elif self.DA_method=='En3DVar':
+            f='{}_Nx{}_from_Nx{}_ens{}_d{}_freq{}_R{}_nobs{}_err{}E{}_{}E{}'.\
+                format(self.DA_method,self.Nx_DA,self.Nx_truth,self.nens,self.delta_days,self.DA_freq,self.R_W,'_'.join(map(str,self.nobs)),
                 self.obs_err[0],self.obs_err[1],self.obs_err[2],self.obs_err[3])
         elif self.DA_method=='UnetKF':
             f='{}_Nx{}_from_Nx{}_ens{}_freq{}_relax{}_hybrid{}_R{}_nobs{}_err{}E{}_{}E{}'.\
@@ -259,12 +273,20 @@ class DA_exp():
         return f
 
     def file_name_short(self):
-        if self.DA_method=='EnKF':
+        if self.DA_method=='NoDA':
+            f='Control'
+        elif self.DA_method=='EnKF':
             f='{}_ens{}_relax{}_R{}'.\
                 format(self.DA_method,self.nens,self.inflate[1],self.R_W)
+        elif self.DA_method=='3DEnVar':
+            f='{}_ens{}_relax{}_R{}'.\
+                format(self.DA_method,self.nens-1,self.inflate[1],self.R_W)
         elif self.DA_method=='3DVar':
-            f='{}_R{}'.\
-                format(self.DA_method,self.R_W)
+            f='{}_R{}_d{}'.\
+                format(self.DA_method,self.R_W,self.delta_days)
+        elif self.DA_method=='En3DVar':
+            f='{}_ens{}_R{}_d{}'.\
+                format(self.DA_method,self.nens,self.R_W,self.delta_days)
         elif self.DA_method=='UnetKF':
             f='{}_ens{}_relax{}_R{}'.\
                 format(self.DA_method,self.nens,self.inflate[1],self.R_W)
@@ -274,25 +296,53 @@ class DA_exp():
         return f
 
     def file_name_label(self):
-        if self.DA_method=='EnKF':
+        if self.DA_method=='NoDA':
+            f='Control'
+        elif self.DA_method=='EnKF':
             # f='{}\nens{}'.\
             #     format(self.DA_method,self.nens)
-            f='{}\nens{}\nrel{}\nR{}'.\
-                format(self.DA_method,self.nens,self.inflate[1],self.R_W)
+            f='Inf{}\nR{}'.\
+                format(self.inflate[1],self.R_W)
         elif self.DA_method=='3DVar':
             # f='{}'.\
             #     format(self.DA_method)
-            f='{}\nR{}'.\
-                format(self.DA_method,self.R_W)
+            f='R{}\nd{}'.\
+                format(self.R_W,self.delta_days)
+        elif self.DA_method=='En3DVar':
+            # f='{}'.\
+            #     format(self.DA_method)
+            f='R{}\nd{}'.\
+                format(self.R_W,self.delta_days)
         elif self.DA_method=='UnetKF':
             # f='{}\nens{}'.\
             #     format(self.DA_method,self.nens)
-            f='{}\nens{}\nrel{}\nR{}'.\
-                format(self.DA_method,self.nens,self.inflate[1],self.R_W)
+            f='Inf{}\nR{}'.\
+                format(self.inflate[1],self.R_W)
         else:
             f='{}'.\
                 format(self.DA_method)
         return f
+    
+    # def file_name_label(self):
+    #     if self.DA_method=='EnKF':
+    #         # f='{}\nens{}'.\
+    #         #     format(self.DA_method,self.nens)
+    #         f='{}\nens{}\nrel{}\nR{}'.\
+    #             format(self.DA_method,self.nens,self.inflate[1],self.R_W)
+    #     elif self.DA_method=='3DVar':
+    #         # f='{}'.\
+    #         #     format(self.DA_method)
+    #         f='{}\nR{}'.\
+    #             format(self.DA_method,self.R_W)
+    #     elif self.DA_method=='UnetKF':
+    #         # f='{}\nens{}'.\
+    #         #     format(self.DA_method,self.nens)
+    #         f='{}\nens{}\nrel{}\nR{}'.\
+    #             format(self.DA_method,self.nens,self.inflate[1],self.R_W)
+    #     else:
+    #         f='{}'.\
+    #             format(self.DA_method)
+    #     return f
         
     def read_mean(self,folder=''):
         file_name=self.file_name()
@@ -325,7 +375,7 @@ class DA_exp():
             
         return std_ds
         
-    def init_DA(self,DA_start,ic_nens=100,ic_seed=0):
+    def init_DA(self,DA_start,ic_ens=100,ic_seed=0):
         '''
         Get initial conditions for DA experiment
         If DA_start==0, read from existing IC files
@@ -333,10 +383,11 @@ class DA_exp():
         '''
         self.ens = Ensemble([pyqg.QGModel(nx=self.Nx_DA,**model_para) for i in range(self.nens)])
         self.obs_ds=self.read_obs()
+        print(self.obs_ds)
         
         if DA_start==0:
-            print('{}/IC_q_Nx{}_ens{}.nc'.format(read_data_dir,self.Nx_DA,ic_nens))
-            q_init=xr.open_dataarray('{}/IC_q_Nx{}_ens{}.nc'.format(read_data_dir,self.Nx_DA,ic_nens))
+            print('{}/IC_q_Nx{}_ens{}.nc'.format(read_data_dir,self.Nx_DA,ic_ens))
+            q_init=xr.open_dataarray('{}/IC_q_Nx{}_ens{}.nc'.format(read_data_dir,self.Nx_DA,ic_ens))
             for i,model in enumerate(self.ens.models):
                 model.q=q_init.isel(model=(i+ic_seed)%len(q_init.model)).data
         else:
@@ -357,15 +408,44 @@ class DA_exp():
 
         if self.DA_method=='3DVar':
             B_static=self.B_ds.cov.data*self.W_ds.W.data
+            # print(matrix_rank(self.B_ds.cov.data))
             posterior=Lin3dvar(prior_data.squeeze(),obs_q,H,R_obs,B_static)
         elif self.DA_method=='EnKF':
             if self.inflate[0]>1.00001:
                 prior_data=ens_inflate(prior_data,prior_data,1,self.inflate[0])
             B_ens=calculate_cov(prior_data)
             B_ens_loc=mat_mul(B_ens,self.W_ds.W.data)
+            print(matrix_rank(B_ens),matrix_rank(B_ens_loc))
             posterior=EnKF(prior_data,obs_q,H,R_obs,B_ens_loc)
             if self.inflate[1]>0.00001:
                 posterior=ens_inflate(prior_data,posterior,2,self.inflate[1])
+            
+            if self.save_B:
+                B_mat=Localize_B(B_ens,self.Nx_DA,Nlev,self.B_loc)
+                Path('{}/{}'.format(save_data_dir,self.file_name())).mkdir(exist_ok=True)
+                B_filename='{}/{}/B_ens_day{:04d}.nc'.format(save_data_dir,self.file_name(),day)
+                B_ens_da=xr.DataArray(B_mat,coords=[forecast_ds.lev,forecast_ds.y,forecast_ds.x,forecast_ds.lev,
+                                                    np.arange(-self.B_loc,self.B_loc+1),np.arange(-self.B_loc,self.B_loc+1)],
+                                      dims=['lev','y','x','lev_d','y_d','x_d'])
+                B_ens_da = B_ens_da.assign_coords(time=forecast_ds.time[-1])
+                B_ens_da = B_ens_da.expand_dims('time')
+                B_ens_ds=xr.Dataset({'B_ens':B_ens_da})
+                B_ens_ds.to_netcdf(B_filename,unlimited_dims=['time'])
+        
+        elif self.DA_method=='3DEnVar':
+            prior_ensemble=prior_data[1:,...]
+            prior_deterministic=prior_data[0,...]
+            if self.inflate[0]>1.00001:
+                prior_ensemble=ens_inflate(prior_ensemble,prior_ensemble,1,self.inflate[0])
+            B_ens=calculate_cov(prior_ensemble)
+            B_ens_loc=mat_mul(B_ens,self.W_ds.W.data)
+            B_static=self.B_ds.cov.data*self.W_ds.W.data
+            posterior_ensemble=EnKF(prior_ensemble,obs_q,H,R_obs,B_ens_loc)
+            posterior_deterministic=Lin3dvar(prior_deterministic,obs_q,H,R_obs,B_ens_loc*(1-self.B_alpha)+B_static*self.B_alpha)
+            if self.inflate[1]>0.00001:
+                posterior_ensemble=ens_inflate(prior_ensemble,posterior_ensemble,2,self.inflate[1])
+            # posterior_ensemble=posterior_ensemble-np.mean(posterior_ensemble,axis=0)[None,...]+posterior_deterministic[None,...]
+            posterior=np.concatenate((posterior_deterministic[None,...],posterior_ensemble),axis=0)
             
             if self.save_B:
                 B_mat=Localize_B(B_ens,self.Nx_DA,Nlev,self.B_loc)
@@ -388,7 +468,6 @@ class DA_exp():
             DA_B_size=self.R_DA*2+1
             training_Unet_size=int(self.R_training/2)*4
             
-            # Localized q of the size of the U-Net are taken from the full q fields
             q_data=np.zeros((self.Nx_DA,self.Nx_DA,Nlev,DA_Unet_size,DA_Unet_size))
             # q_data=np.zeros((self.Nx_DA,self.Nx_DA,4,DA_Unet_size,DA_Unet_size))
             for i in np.arange(self.Nx_DA):
@@ -398,20 +477,15 @@ class DA_exp():
                     # q_data[j,i,2,:,:]=q_data[j,i,0,:,:]-localize_q(analysis_prev.mean('model').isel(lev=0),j,i,self.Nx_DA,self.R_DA)[...,0:DA_Unet_size,0:DA_Unet_size]
                     # q_data[j,i,3,:,:]=q_data[j,i,1,:,:]-localize_q(analysis_prev.mean('model').isel(lev=1),j,i,self.Nx_DA,self.R_DA)[...,0:DA_Unet_size,0:DA_Unet_size]
 
-            # Normalization
             q_stacked=q_data.reshape((-1,Nlev,DA_Unet_size,DA_Unet_size))/ml_std.q_std.data[None,:,None,None]
             # print(q_stacked.shape)
 
-            
-            B_data=np.zeros((self.Nx_DA,self.Nx_DA,3,DA_B_size,DA_B_size))
-            B_stacked=B_data.reshape((-1,3,DA_B_size,DA_B_size))
+            B_stacked=np.zeros((self.Nx_DA*self.Nx_DA,3,DA_B_size,DA_B_size))
             B_pred_all=np.zeros((B_stacked.shape[0],B_stacked.shape[1],training_Unet_size,training_Unet_size))
             chunk=2048
             total=q_stacked.shape[0]
             B_std=np.array([ml_std.B_std.data[0,0],ml_std.B_std.data[0,1],ml_std.B_std.data[1,1]])
             
-            # q is interpolated if the DA model has different grids than than model used to train the U-Net
-            # Here it is exclusively downsampled to half the resolution (double the drig size)
             if self.training_exp.Nx_DA!=self.Nx_DA:
                 q_interp=np.zeros((q_stacked.shape[0],q_stacked.shape[1],training_Unet_size,training_Unet_size))
                 # q_interp=q_stacked[:,:,0::2,0::2]
@@ -423,7 +497,6 @@ class DA_exp():
             else:
                 q_interp=q_stacked
             
-            # Covariance matrices are predicted by the U-Net using the localized (and interpolated) q as input
             for i in np.arange(int(total/chunk)+1):
                 # B_pred=ml_model(torch.from_numpy(q_interp[i*chunk:(i+1)*chunk,:,:,:]).double()).detach().numpy()*B_std[None,:,None,None]
                 B_pred=ml_model(torch.from_numpy(q_interp[i*chunk:(i+1)*chunk,:,:,:]).double().to(device)).to('cpu').detach().numpy()*B_std[None,:,None,None]
@@ -431,11 +504,19 @@ class DA_exp():
         
             # print(B_pred_all.shape)
             # print(B_stacked.shape)
-            
-            # The covariance matrices are interpolated back to the DA resoultion from the U-Net predicted resolution
             if self.training_exp.Nx_DA!=self.Nx_DA:
                 # X_training=np.arange(0,DA_Unet_size,2)
                 # Y_training=np.arange(0,DA_Unet_size,2)
+                # X_training_mesh,Y_training_mesh=np.meshgrid(X_training,Y_training)
+                # X_DA=np.arange(0,DA_Unet_size)
+                # Y_DA=np.arange(0,DA_Unet_size)
+                # X_DA_mesh,Y_DA_mesh=np.meshgrid(X_DA,Y_DA)
+                # B_interp=griddata((X_training_mesh.flatten(),Y_training_mesh.flatten()),
+                #                   B_pred_all.reshape((B_stacked.shape[0]*B_stacked.shape[1],-1)).transpose(),
+                #                   (X_DA_mesh,Y_DA_mesh),method='linear',fill_value=0.0)
+                # # print(B_interp.shape)
+                # B_stacked[:,:,0:DA_Unet_size,0:DA_Unet_size]=B_interp.transpose().reshape((B_stacked.shape[0],B_stacked.shape[1],DA_Unet_size,DA_Unet_size))
+
                 X_training=np.arange(2,DA_Unet_size-2,2)
                 Y_training=np.arange(2,DA_Unet_size-2,2)
                 X_training_mesh,Y_training_mesh=np.meshgrid(X_training,Y_training)
@@ -450,13 +531,12 @@ class DA_exp():
                 
             else:
                 B_stacked[:,:,0:DA_Unet_size,0:DA_Unet_size]=B_pred_all
-                
-            # The localized covariance matrices are put back into the global form 
-            B_Unet=globalize_B(B_stacked.reshape(B_data.shape),self.Nx_DA,Nlev,self.R_DA)
+            B_Unet=globalize_B(B_stacked.reshape((self.Nx_DA,self.Nx_DA,3,DA_B_size,DA_B_size)),
+                               self.Nx_DA,Nlev,self.R_DA)
             B_Unet_loc=(B_Unet+self.B_alpha*self.B_ds.cov.data)*self.W_ds.W.data
-            
+            print(matrix_rank(B_Unet),matrix_rank(B_Unet_loc))
             if self.nens==1:
-                posterior=Lin3dvar(prior_data.squeeze(),obs_q,H,R_obs,B_Unet_loc)
+                posterior=EnKF_mean(prior_data.squeeze(),obs_q,H,R_obs,B_Unet_loc)
             elif self.nens>1:
                 posterior=EnKF(prior_data,obs_q,H,R_obs,B_Unet_loc)
                 
@@ -481,11 +561,18 @@ class DA_exp():
     def run_exp(self,DA_days=365,DA_start=0,ic_seed=0,**kwargs):
         self.init_DA(DA_start,ic_seed=ic_seed)
         
-        B_filename='{}/B_Nx{}_100years_2lev.nc'.format(read_data_dir,self.Nx_DA)
-        W_filename='{}/W_Nx{}_L{}.nc'.format(read_data_dir,self.Nx_DA,self.R_W)
-        self.B_loc=max(int(np.ceil(2*self.R_W*1000/(self.ens.models[0].L/self.ens.models[0].nx))),8)
-        self.B_ds=xr.open_dataset(B_filename)
-        self.W_ds=xr.open_dataset(W_filename)
+        if self.DA_method in ['3DVar','En3DVar','3DEnVar','UnetKF','EnKF']:
+            B_filename='{}/B_d{}_Nx{}_500years.nc'.format(read_data_dir,self.delta_days,self.Nx_DA)
+            W_filename='{}/W_Nx{}_L{}.nc'.format(read_data_dir,self.Nx_DA,self.R_W)
+            self.B_loc=max(int(np.ceil(2*self.R_W*1000/(self.ens.models[0].L/self.ens.models[0].nx))),8)
+            self.B_ds=xr.open_dataset(B_filename)
+            self.W_ds=xr.open_dataset(W_filename)
+        if self.DA_method=='3DEnVar':
+            mean_members=[0]
+            std_members=np.arange(1,self.nens,dtype=int)
+        else:
+            mean_members=np.arange(0,self.nens,dtype=int)
+            std_members=np.arange(0,self.nens,dtype=int)
         DA_kwargs={}
         if 'output_str' in kwargs:
             output_str=kwargs['output_str']
@@ -509,16 +596,19 @@ class DA_exp():
                     m.q=analysis[i,...]
                     
             if day==DA_start:
-                ds_mean=ds_forecast.mean('model')
+                ds_mean=ds_forecast.isel(model=mean_members).mean('model')
                 if self.nens>1:
-                    ds_std=ds_forecast.std('model')
+                    ds_std=ds_forecast.isel(model=std_members).std('model')
             else:
-                ds_mean=xr.concat([ds_mean,ds_forecast.mean('model')],dim='time')
+                ds_mean=xr.concat([ds_mean,ds_forecast.isel(model=mean_members).mean('model')],dim='time')
                 if self.nens>1:
-                    ds_std=xr.concat([ds_std,ds_forecast.std('model')],dim='time')
+                    ds_std=xr.concat([ds_std,ds_forecast.isel(model=std_members).std('model')],dim='time')
                         
         file_name=self.file_name()
-        mean_file='{}/{}/EnsMean_{}.nc'.format(save_data_dir,output_str,file_name)
+        if ic_seed>0:
+            mean_file='{}/{}/EnsMean_{}_{}.nc'.format(save_data_dir,output_str,file_name,ic_seed)
+        else:
+            mean_file='{}/{}/EnsMean_{}.nc'.format(save_data_dir,output_str,file_name)
         ds_mean.to_netcdf(mean_file,mode='w')
         if self.nens>1:  
             std_file='{}/{}/EnsStd_{}.nc'.format(save_data_dir,output_str,file_name)    
@@ -561,45 +651,42 @@ class Ensemble():
         return xr.concat(results, dim='time')
 
 # Calculate background covariance matrix for 3DVar
-def B_calculation_3DVar(Nx=64,years=100,lev=2,save_netcdf=True):
+def B_calculation_3DVar(Nx=64,years=100,delta_days=20,save_netcdf=True,coeff=1):
     truth_file='{}/Truth_Nx{}_{}years.nc'.format(read_data_dir,Nx,years)
     try:
         ds_truth=xr.open_dataset(truth_file)
     except:
         print('No such truth file')
 
-    q1=ds_truth.q.isel(lev=slice(0,lev)).squeeze('model').stack(loc=('lev','y','x'))
-    nxy=len(ds_truth.x)*len(ds_truth.y)*lev
-    q1_mean=q1.mean('time')
-    q1_std=(np.sqrt(((q1-q1_mean)**2).sum('time')/(len(q1.time)-1))).data
-    q1_std_np=q1_std.reshape((len(q1_std),1))
-    q1_var_mat=(q1_std_np@q1_std_np.T).data
+    nt=len(ds_truth.time)
+    nxy=len(ds_truth.x)*len(ds_truth.y)*len(ds_truth.lev)
+    q=ds_truth.q.squeeze('model').stack(loc=('lev','y','x'))
+    q_diff=q.isel(time=slice(delta_days,nt))-q.isel(time=slice(0,nt-delta_days)).data
+    
+    q_std=(np.sqrt((q_diff**2).sum('time')/(len(q_diff.time)-1))).data
+    q_std_np=q_std.reshape((len(q_std),1))
+    q_var_mat=(q_std_np@q_std_np.T).data
 
-    q1_cov=((q1-q1_mean).data.T @ (q1-q1_mean).data)/(len(q1.time)-1)
-    q1_corr=q1_cov/q1_var_mat
-
-    ds = xr.Dataset({"cov": (["loc", "loc"], q1_cov),
-                    "corr": (["loc", "loc"], q1_corr),
-                    'std': (["loc"], q1_std)},
+    q_cov=(q_diff.data.T @ q_diff.data)/(len(q_diff.time)-1)*float(coeff)
+    q_corr=q_cov/q_var_mat
+    # q_corr=np.cov(q_diff.T)
+    
+    ds = xr.Dataset({"cov": (["loc", "loc"], q_cov),
+                    "corr": (["loc", "loc"], q_corr),
+                    'std': (["loc"], q_std)},
                     coords={"loc": np.arange(nxy),
                             'x':ds_truth.x,
                             'y':ds_truth.y},
                     attrs={'truth_file':truth_file})
 
     if save_netcdf:
-        file_name='{}/B_Nx{}_{}years_{}lev.nc'.format(save_data_dir,Nx,years,lev)
+        file_name='{}/B_d{}_Nx{}_{}years.nc'.format(save_data_dir,delta_days,Nx,years)
         if not exists(file_name):
             ds.to_netcdf(file_name)
             
     return ds
 
-# Take subset (subdomain) of data from the global matrix (domain)
 def localize_q(q,y,x,Nx,B_R):
-    # q: global data matrix
-    # x,y: center point for the subset
-    # Nx: global domain size
-    # B_R: radius for the subset
-    
     i_y=np.arange(y-B_R,y+B_R+1)
     i_x=np.arange(x-B_R,x+B_R+1)
     i_y1=np.where(i_y>=0,i_y,i_y+Nx)
@@ -755,6 +842,26 @@ def EnKF(prior,obs,H,R,B):
 
     return posterior.T
 
+def EnKF_mean(prior,obs,H,R,B):
+    
+    # The analysis step for the (stochastic) ensemble Kalman filter 
+    # with virtual observations
+
+    nens,nxy = prior[None,...].shape # n is the state dimension and N is the size of ensemble
+    nobs = obs.shape[0] # m is the size of measurement vector
+    
+    # compute Kalman gain
+    D = H@B@H.T + R
+    K = B @ H.T @ np.linalg.inv(D)
+    
+    # perturb observations
+    obs_ens=obs.repeat(nens).reshape(nobs,nens)+\
+        np.sqrt(R)@np.random.standard_normal((nobs,nens))*0.0
+    # compute analysis ensemble
+    posterior = prior[None,...].T + K @ (obs_ens-H@(prior[None,...].T))
+    
+    return posterior.T
+
 @jit(nopython=True,parallel=True)
 def Lin3dvar(ub,w,H,R,B):
     
@@ -762,6 +869,12 @@ def Lin3dvar(ub,w,H,R,B):
     b = (w-H@ub)
     ua = ub + B@(H.T)@np.linalg.solve(A,b) #solve a linear system
         
+    # Bi = np.linalg.inv(B)
+    # Ri = np.linalg.inv(R)
+    # A = Bi + (H.T)@Ri@H
+    # b = (H.T)@Ri@(w-H@ub)
+    # ua = ub + np.linalg.solve(A,b) #solve a linear system 
+    
     return ua
 
 @jit(nopython=True,parallel=True)
